@@ -5,9 +5,20 @@
 
 set -e
 
+# Перевірка запуску від root
+if [ "$EUID" -ne 0 ]; then
+    echo "=== Перезапуск з правами root ==="
+    echo "Потрібні права root для налаштування SSH сервера"
+    exec sudo "$0" "$@"
+fi
+
+# Отримання оригінального користувача
+ORIGINAL_USER="${SUDO_USER:-$USER}"
+ORIGINAL_HOME=$(eval echo "~$ORIGINAL_USER")
+
 echo "=== Налаштування SSH сервера ==="
 echo "Дата: $(date)"
-echo "Користувач: $USER"
+echo "Користувач: $ORIGINAL_USER"
 echo "Хост: $(hostname)"
 echo
 
@@ -125,10 +136,10 @@ log_info "Запуск SSH сервера..."
 start_ssh_server
 
 # Створення директорії .ssh якщо не існує
-SSH_DIR="$HOME/.ssh"
+SSH_DIR="$ORIGINAL_HOME/.ssh"
 if [ ! -d "$SSH_DIR" ]; then
     log_info "Створення директорії .ssh..."
-    mkdir -p "$SSH_DIR"
+    sudo -u "$ORIGINAL_USER" mkdir -p "$SSH_DIR"
     chmod 700 "$SSH_DIR"
 else
     log_info "Директорія .ssh вже існує"
@@ -138,7 +149,7 @@ fi
 AUTH_KEYS="$SSH_DIR/authorized_keys"
 if [ ! -f "$AUTH_KEYS" ]; then
     log_info "Створення файлу authorized_keys..."
-    touch "$AUTH_KEYS"
+    sudo -u "$ORIGINAL_USER" touch "$AUTH_KEYS"
     chmod 600 "$AUTH_KEYS"
 else
     log_info "Файл authorized_keys вже існує"
@@ -148,7 +159,7 @@ fi
 SERVER_KEY="$SSH_DIR/id_rsa"
 if [ ! -f "$SERVER_KEY" ]; then
     log_info "Генерація SSH ключа для сервера..."
-    ssh-keygen -t rsa -b 4096 -f "$SERVER_KEY" -N "" -C "$USER@$(hostname)-server"
+    sudo -u "$ORIGINAL_USER" ssh-keygen -t rsa -b 4096 -f "$SERVER_KEY" -N "" -C "$ORIGINAL_USER@$(hostname)-server"
     chmod 600 "$SERVER_KEY"
     chmod 644 "$SERVER_KEY.pub"
 else
@@ -174,13 +185,37 @@ sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' "$SSH_CON
 
 # Додавання користувача до групи ssh (якщо існує)
 if getent group ssh > /dev/null 2>&1; then
-    sudo usermod -a -G ssh "$USER"
+    sudo usermod -a -G ssh "$ORIGINAL_USER"
     log_info "Користувач доданий до групи ssh"
 fi
 
 # Отримання IP адреси
-IP_ADDRESS=$(hostname -I | awk '{print $1}')
-log_info "IP адреса сервера: $IP_ADDRESS"
+log_info "Отримання IP адреси сервера..."
+IP_ADDRESS=$(hostname -I | awk '{print $1}' 2>/dev/null)
+
+# Якщо hostname -I не спрацювала, спробуємо інші методи
+if [ -z "$IP_ADDRESS" ]; then
+    IP_ADDRESS=$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1)
+fi
+
+# Якщо і це не спрацювало, спробуємо ip addr
+if [ -z "$IP_ADDRESS" ]; then
+    IP_ADDRESS=$(ip addr show | grep -E "inet.*scope global" | awk '{print $2}' | cut -d/ -f1 | head -1)
+fi
+
+# Якщо все ще немає IP, спробуємо ifconfig
+if [ -z "$IP_ADDRESS" ]; then
+    IP_ADDRESS=$(ifconfig 2>/dev/null | grep -E "inet.*broadcast" | awk '{print $2}' | head -1)
+fi
+
+# Якщо IP досі не знайдено
+if [ -z "$IP_ADDRESS" ]; then
+    log_warn "Не вдалося автоматично визначити IP адресу"
+    echo "Виконайте команду 'ip addr show' або 'ifconfig' для отримання IP адреси"
+    IP_ADDRESS="[IP_NOT_FOUND]"
+else
+    log_info "IP адреса сервера: $IP_ADDRESS"
+fi
 
 # Перезапуск SSH сервера
 log_info "Перезапуск SSH сервера..."
@@ -226,14 +261,23 @@ fi
 echo
 echo "=== ІНФОРМАЦІЯ ДЛЯ ПІДКЛЮЧЕННЯ ==="
 echo "IP адреса: $IP_ADDRESS"
-echo "Користувач: $USER"
+echo "Користувач: $ORIGINAL_USER"
 echo "SSH порт: $(sudo ss -tlnp | grep :22 | awk '{print $4}' | cut -d: -f2 | head -1)"
 echo
 echo "Команда для підключення з іншого ПК:"
-echo "ssh $USER@$IP_ADDRESS"
+echo "ssh $ORIGINAL_USER@$IP_ADDRESS"
 echo
 echo "Для безпечного підключення скопіюйте публічний ключ клієнта до:"
 echo "$AUTH_KEYS"
 echo
 log_info "Налаштування сервера завершено!"
-echo "Тепер запустіть скрипт setup_client.sh на клієнтському ПК"
+echo
+echo "=== ДАЛЬШІ КРОКИ ==="
+echo "1. Перейдіть на новий ПК (клієнт)"
+echo "2. Запустіть команду:"
+echo "   ./setup_client.sh $IP_ADDRESS $ORIGINAL_USER"
+echo
+echo "Або запустіть інтерактивно:"
+echo "   ./setup_client.sh"
+echo "   і введіть IP: $IP_ADDRESS"
+echo "   і введіть користувача: $ORIGINAL_USER"
