@@ -178,10 +178,13 @@ fi
 
 # Set secure SSH parameters
 log_info "Updating SSH config for security..."
-sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' "$SSH_CONFIG"
+sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' "$SSH_CONFIG"
+sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' "$SSH_CONFIG"
 sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' "$SSH_CONFIG"
 sed -i 's/#AuthorizedKeysFile/AuthorizedKeysFile/' "$SSH_CONFIG"
 sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' "$SSH_CONFIG"
+
+log_info "Temporarily enabled password authentication for key setup"
 
 # Add user to ssh group (if exists)
 if getent group ssh > /dev/null 2>&1; then
@@ -277,3 +280,6 @@ echo "Or run interactively:"
 echo "   ./setup_client.sh"
 echo "   and enter IP: $IP_ADDRESS"
 echo "   and enter user: $ORIGINAL_USER"
+echo
+echo "Note: Password authentication is temporarily enabled for key setup"
+echo "It will be disabled automatically after client setup completes"

@@ -1,24 +1,24 @@
 #!/bin/bash
 
-# Скрипт для нового ПК (клієнта)
-# Створює SSH ключ та підключається до віддаленого сервера
+# SSH Client Setup Script
+# Creates SSH key and connects to remote server
 
 set -e
 
-echo "=== Налаштування SSH клієнта ==="
-echo "Дата: $(date)"
-echo "Користувач: $USER"
-echo "Хост: $(hostname)"
+echo "=== SSH Client Setup ==="
+echo "Date: $(date)"
+echo "User: $USER"
+echo "Host: $(hostname 2>/dev/null || echo 'unknown')"
 echo
 
-# Кольори для виводу
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Функція для виводу повідомлень
+# Logging functions
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -35,7 +35,7 @@ log_input() {
     echo -e "${BLUE}[INPUT]${NC} $1"
 }
 
-# Параметри підключення
+# Connection parameters
 REMOTE_HOST=""
 REMOTE_USER=""
 KEY_TYPE="ed25519"
@@ -43,82 +43,98 @@ KEY_NAME="id_${KEY_TYPE}"
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
 
-# Функція для отримання параметрів підключення
+# Function to get connection parameters
 get_connection_params() {
     if [ -z "$1" ] || [ -z "$2" ]; then
-        log_input "Введіть параметри підключення до віддаленого сервера:"
+        log_input "Enter connection parameters:"
         
-        if [ -z "$1" ]; then
-            read -p "IP адреса сервера: " REMOTE_HOST
-        else
-            REMOTE_HOST="$1"
-        fi
+        while [ -z "$REMOTE_HOST" ]; do
+            read -p "Server IP address: " REMOTE_HOST
+        done
         
-        if [ -z "$2" ]; then
-            read -p "Ім'я користувача на сервері [$USER]: " REMOTE_USER
-            REMOTE_USER=${REMOTE_USER:-$USER}
-        else
-            REMOTE_USER="$2"
-        fi
+        while [ -z "$REMOTE_USER" ]; do
+            read -p "Username on server: " REMOTE_USER
+        done
     else
         REMOTE_HOST="$1"
         REMOTE_USER="$2"
     fi
 }
 
-# Функція для створення SSH ключа
+# Function to create SSH key
 create_ssh_key() {
     if [ ! -f "$KEY_PATH" ]; then
-        log_info "Створення SSH ключа ($KEY_TYPE)..."
+        log_info "Creating SSH key..."
         mkdir -p "$SSH_DIR"
         chmod 700 "$SSH_DIR"
-        
-        ssh-keygen -t "$KEY_TYPE" -f "$KEY_PATH" -N "" -C "$USER@$(hostname)-client"
+        ssh-keygen -t "$KEY_TYPE" -f "$KEY_PATH" -N "" -C "$USER@$(hostname 2>/dev/null || echo 'client')"
         chmod 600 "$KEY_PATH"
         chmod 644 "$KEY_PATH.pub"
-        
-        log_info "SSH ключ створено: $KEY_PATH"
+        log_info "SSH key created: $KEY_PATH"
     else
-        log_info "SSH ключ вже існує: $KEY_PATH"
+        log_info "SSH key already exists: $KEY_PATH"
     fi
 }
 
-# Функція для копіювання ключа на сервер
+# Function to copy key to server
 copy_key_to_server() {
-    log_info "Копіювання публічного ключа на сервер..."
+    log_info "Copying public key to server..."
     
-    # Спроба автоматичного копіювання
+    # Remove the host from known_hosts to avoid conflicts
+    ssh-keygen -R "$REMOTE_HOST" 2>/dev/null || true
+    
+    # Try to copy key with timeout
     if command -v ssh-copy-id &> /dev/null; then
-        log_info "Використання ssh-copy-id..."
-        ssh-copy-id -i "$KEY_PATH.pub" "$REMOTE_USER@$REMOTE_HOST"
-    else
-        log_warn "ssh-copy-id не знайдено. Використання альтернативного методу..."
+        log_info "Using ssh-copy-id (you may need to enter password)..."
         
-        # Альтернативний метод
-        cat "$KEY_PATH.pub" | ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh"
+        # Use timeout to prevent hanging
+        if timeout 60 ssh-copy-id -i "$KEY_PATH.pub" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$REMOTE_USER@$REMOTE_HOST"; then
+            log_info "✓ Public key successfully copied to server"
+        else
+            log_error "✗ Failed to copy key using ssh-copy-id"
+            log_info "Trying manual method..."
+            
+            # Fallback to manual method
+            if timeout 60 bash -c "cat '$KEY_PATH.pub' | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 '$REMOTE_USER@$REMOTE_HOST' 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh'"; then
+                log_info "✓ Public key successfully copied using manual method"
+            else
+                log_error "✗ Both methods failed to copy public key"
+                log_error "Please check:"
+                log_error "1. Server is running and accessible"
+                log_error "2. Username and IP are correct"
+                log_error "3. Password authentication is enabled on server"
+                exit 1
+            fi
+        fi
+    else
+        log_info "Using manual key copy method..."
+        if timeout 60 bash -c "cat '$KEY_PATH.pub' | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 '$REMOTE_USER@$REMOTE_HOST' 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh'"; then
+            log_info "✓ Public key successfully copied to server"
+        else
+            log_error "✗ Failed to copy public key"
+            exit 1
+        fi
     fi
-    
-    log_info "Публічний ключ успішно скопійовано на сервер"
 }
 
-# Функція для створення SSH конфігурації
+# Function to create SSH config
 create_ssh_config() {
-    local config_file="$SSH_DIR/config"
-    local host_alias="old-pc"
+    config_file="$SSH_DIR/config"
+    host_alias="old-pc"
     
-    log_info "Створення SSH конфігурації..."
+    log_info "Creating SSH configuration..."
     
-    # Створення конфігурації якщо не існує
+    # Create config file if not exists
     if [ ! -f "$config_file" ]; then
         touch "$config_file"
         chmod 600 "$config_file"
     fi
     
-    # Перевірка чи вже є конфігурація для цього хоста
+    # Check if configuration already exists
     if ! grep -q "Host $host_alias" "$config_file"; then
         cat >> "$config_file" << EOF
 
-# Конфігурація для старого ПК
+# Configuration for old PC
 Host $host_alias
     HostName $REMOTE_HOST
     User $REMOTE_USER
@@ -130,84 +146,107 @@ Host $host_alias
     UserKnownHostsFile /dev/null
 EOF
         
-        log_info "Додано конфігурацію для хоста '$host_alias'"
-        log_info "Тепер ви можете підключатися командою: ssh $host_alias"
+        log_info "Added configuration for host '$host_alias'"
+        log_info "Now you can connect with: ssh $host_alias"
     else
-        log_info "Конфігурація для хоста '$host_alias' вже існує"
+        log_info "Configuration for host '$host_alias' already exists"
     fi
 }
 
-# Функція для тестування підключення
-test_connection() {
-    log_info "Тестування SSH підключення..."
+# Function to disable password authentication on server
+disable_password_auth() {
+    log_info "Disabling password authentication on server for security..."
     
-    # Тест з використанням ключа
-    if ssh -i "$KEY_PATH" -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" "echo 'SSH підключення успішне! Дата на сервері: \$(date)'" 2>/dev/null; then
-        log_info "✓ Підключення через SSH ключ успішне!"
+    # Connect to server and disable password authentication
+    ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST" "
+        sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+        sudo systemctl restart sshd || sudo systemctl restart ssh
+        echo 'Password authentication disabled successfully'
+    " 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        log_info "✓ Password authentication disabled on server"
+    else
+        log_warn "Could not disable password authentication automatically"
+        log_warn "Please run on server: sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config"
+        log_warn "Then restart SSH: sudo systemctl restart sshd"
+    fi
+}
+
+# Function to test connection
+test_connection() {
+    log_info "Testing SSH connection..."
+    
+    # Test with key
+    if ssh -i "$KEY_PATH" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "$REMOTE_USER@$REMOTE_HOST" "echo 'SSH connection successful! Server date: \$(date)'" 2>/dev/null; then
+        log_info "✓ SSH key authentication successful"
         return 0
     else
-        log_error "✗ Помилка підключення через SSH ключ"
+        log_error "✗ SSH key authentication failed"
         return 1
     fi
 }
 
-# Функція для виведення корисних команд
+# Function to show useful commands
 show_useful_commands() {
     echo
-    echo "=== КОРИСНІ КОМАНДИ ==="
-    echo "Підключення до сервера:"
-    echo "  ssh old-pc                    # Використовуючи аліас"
-    echo "  ssh $REMOTE_USER@$REMOTE_HOST  # Прямий спосіб"
+    echo "=== USEFUL COMMANDS ==="
+    echo "Connect to server:"
+    echo "  ssh old-pc                    # Using alias"
+    echo "  ssh $REMOTE_USER@$REMOTE_HOST  # Direct method"
     echo
-    echo "Копіювання файлів:"
-    echo "  scp file.txt old-pc:~/         # На сервер"
-    echo "  scp old-pc:~/file.txt ./       # З сервера"
+    echo "Copy files:"
+    echo "  scp file.txt old-pc:~/         # To server"
+    echo "  scp old-pc:~/file.txt ./       # From server"
     echo
-    echo "Виконання команд на сервері:"
+    echo "Execute commands on server:"
     echo "  ssh old-pc 'ls -la'"
     echo "  ssh old-pc 'df -h'"
-    echo "  ssh old-pc 'htop'"
     echo
-    echo "Тунелювання портів:"
-    echo "  ssh -L 8080:localhost:80 old-pc  # Локальний тунель"
-    echo "  ssh -R 9090:localhost:22 old-pc  # Зворотний тунель"
+    echo "Port forwarding:"
+    echo "  ssh -L 8080:localhost:80 old-pc  # Local tunnel"
+    echo "  ssh -R 9090:localhost:22 old-pc  # Reverse tunnel"
     echo
 }
 
-# Головна функція
+# Main function
 main() {
-    # Отримання параметрів
+    # Get parameters
     get_connection_params "$1" "$2"
     
-    log_info "Підключення до: $REMOTE_USER@$REMOTE_HOST"
+    log_info "Connecting to: $REMOTE_USER@$REMOTE_HOST"
     
-    # Створення SSH ключа
+    # Create SSH key
     create_ssh_key
     
-    # Копіювання ключа на сервер
+    # Copy key to server
     copy_key_to_server
     
-    # Створення SSH конфігурації
+    # Create SSH config
     create_ssh_config
     
-    # Тестування підключення
+    # Test connection
     if test_connection; then
-        log_info "Налаштування клієнта успішно завершено!"
+        log_info "✓ SSH key authentication successful"
+        
+        # Disable password authentication on server
+        disable_password_auth
+        
+        log_info "✓ Setup completed successfully!"
         show_useful_commands
     else
-        log_error "Налаштування завершено з помилками"
+        log_error "✗ Setup completed with errors"
+        echo "Try connecting manually: ssh $REMOTE_USER@$REMOTE_HOST"
         exit 1
     fi
 }
 
-# Перевірка параметрів та запуск
+# Check parameters and run
 if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    echo "Використання: $0 [IP_ADDRESS] [USERNAME]"
-    echo "Приклад: $0 192.168.1.100 myuser"
-    echo
-    echo "Якщо параметри не вказані, скрипт запитає їх інтерактивно"
+    echo "Usage: $0 [IP_ADDRESS] [USERNAME]"
+    echo "Example: $0 10.0.2.15 test"
     exit 0
 fi
 
-# Запуск головної функції
+# Run main function
 main "$1" "$2"

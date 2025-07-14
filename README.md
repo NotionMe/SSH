@@ -1,7 +1,89 @@
 # SSH Setup Scripts
 
-Набір скриптів для налаштування SSH підключення між двома Linux ПК.
-Підтримує Arch Linux, Debian/Ubuntu та RedHat/CentOS/Fedora.
+Automated SSH server and client setup scripts for secure remote connections between two Linux computers.
+
+## 📋 Overview
+
+These scripts help you quickly establish secure SSH connection from a new PC to an old PC, allowing remote access and file transfers.
+
+## 📁 Files
+
+- `setup_server.sh` - Configure SSH server on old PC
+- `setup_client.sh` - Configure SSH client on new PC  
+- `diagnose.sh` - Troubleshooting tool
+- `USAGE.md` - Detailed step-by-step guide
+
+## ⚡ Quick Start
+
+### 1. Server Setup (Old PC)
+```bash
+chmod +x setup_server.sh
+./setup_server.sh
+```
+Note the displayed IP address and username!
+
+### 2. Client Setup (New PC)
+```bash
+chmod +x setup_client.sh
+./setup_client.sh 10.0.2.15 test
+```
+Replace IP and username with your values.
+
+### 3. Connect
+```bash
+ssh old-pc
+```
+
+## 🔧 Features
+
+- **Automatic installation** - Installs SSH server if needed
+- **Secure authentication** - Uses Ed25519 key pairs
+- **Firewall configuration** - Opens SSH port automatically
+- **Connection testing** - Verifies setup works
+- **Color logging** - Clear status messages
+- **Cross-distro support** - Works on Ubuntu, Debian, Arch, CentOS
+
+## 📖 Detailed Guide
+
+For complete step-by-step instructions, see [USAGE.md](USAGE.md)
+
+## 🛠️ Requirements
+
+- Two Linux computers on same network
+- `sudo` privileges for server setup
+- SSH client tools (usually pre-installed)
+
+## 🔒 Security Features
+
+- Disables password authentication
+- Uses modern Ed25519 encryption
+- Configures secure SSH parameters
+- Enables firewall rules for SSH
+- Creates proper file permissions
+
+## 📞 Common Commands
+
+After setup:
+```bash
+# Connect to server
+ssh old-pc
+
+# Copy files
+scp file.txt old-pc:~/
+scp old-pc:~/file.txt ./
+
+# Execute commands
+ssh old-pc 'ls -la'
+ssh old-pc 'df -h'
+```
+
+## 🚨 Troubleshooting
+
+If connection fails:
+1. Check both computers are on same network
+2. Verify SSH service: `systemctl status ssh`
+3. Run diagnostic: `./diagnose.sh`
+4. Check firewall settings
 
 ## Структура проекту
 
